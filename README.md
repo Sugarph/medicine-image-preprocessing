@@ -86,6 +86,22 @@ Measured on a 163-image dataset:
 
 Crop timeout rate: 1.2% (2/163). Crop applied confidently on 156/163 images (96%); the remaining 7 fell back to the uncropped image (2 timeout, 5 low-confidence rejection).
 
+### Per-stage breakdown
+
+| Stage | p50 | p90 | max |
+| --- | --- | --- | --- |
+| canonicalize (decode) | 39.0 ms | 269.2 ms | 336.5 ms |
+| crop (GrabCut) | 529.6 ms | 1162.7 ms | 2538.5 ms |
+| quality_before (capped preview) | 45.8 ms | 54.4 ms | 95.5 ms |
+| deskew | 23.6 ms | 51.3 ms | 101.7 ms |
+| pre_enhancement_resize | 1.7 ms | 13.7 ms | 45.6 ms |
+| working_quality (post-geometry) | 75.0 ms | 179.3 ms | 250.2 ms |
+| white_balance | 51.9 ms | 168.9 ms | 352.3 ms |
+| sharpen | 0.0 ms | 189.1 ms | 491.2 ms |
+| quality_after | 111.3 ms | 177.0 ms | 244.8 ms |
+| clahe | 0.0 ms | 18.6 ms | 70.2 ms |
+| resize (final) | 6.0 ms | 10.5 ms | 20.7 ms |
+
 ## Limitations
 
 - No object detection.
