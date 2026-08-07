@@ -50,7 +50,7 @@ def test_installed_setuptools_build_contains_and_loads_v2_threshold_resource(tmp
                 "import sys; "
                 f"sys.path.insert(0, {str(install_dir)!r}); "
                 "from medicine_preprocess import PreprocessConfig; "
-                "assert PreprocessConfig.grabcut_experimental().preset_version == '1'"
+                "assert PreprocessConfig.grabcut().preset_version == '1'"
             ),
         ],
         cwd=tmp_path,

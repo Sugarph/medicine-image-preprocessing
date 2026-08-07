@@ -54,6 +54,16 @@ from .validation import (
 )
 
 
+# Presets that get the full experimental v1 pipeline behavior (deskew,
+# quality thresholds v2, perspective availability, pipeline version
+# stamping) -- the crop mechanism is the only thing that differs between
+# them.
+_EXPERIMENTAL_PRESETS = {
+    ("grabcut", "1"),
+    ("yolo_label_crop_experimental", "1"),
+}
+
+
 def _exception_details(exc: Exception) -> dict[str, str]:
     return {
         "exception_type": type(exc).__name__,
@@ -235,7 +245,7 @@ def _preprocess_image_impl(
     source_id: str | None = None,
     debug_transaction: _DebugTransaction,
 ) -> PreprocessResult:
-    active = PreprocessConfig.grabcut_experimental() if config is None else config
+    active = PreprocessConfig.grabcut() if config is None else config
     if not isinstance(active, PreprocessConfig):
         raise TypeError("config must be a PreprocessConfig")
 
@@ -247,8 +257,8 @@ def _preprocess_image_impl(
     canonical_record = _timed_record(canonical_record, canonical_started)
     operations = [canonical_record]
     experimental_document_geometry = (
-        active.preset_name == "grabcut_experimental" and active.preset_version == "1"
-    )
+        active.preset_name, active.preset_version
+    ) in _EXPERIMENTAL_PRESETS
     warnings: list[str] = []
     debug_sink: DebugSink | None = None
     if active.debug.enabled:

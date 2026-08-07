@@ -7,7 +7,7 @@ from typing import Literal
 
 
 ColorOrder = Literal["BGR", "RGB", "GRAY", "BGRA", "RGBA"]
-CropMode = Literal["none", "grabcut_foreground"]
+CropMode = Literal["none", "grabcut_foreground", "yolo_label"]
 GammaMode = Literal["off", "manual", "automatic"]
 ContrastMode = Literal["off", "clahe", "automatic"]
 DenoiseMode = Literal["off", "median", "bilateral", "nlmeans", "automatic"]
@@ -135,9 +135,17 @@ class CropConfig:
     grabcut_soft_budget_ms: float = 1500.0
     grabcut_time_budget_ms: float = 2500.0
     grabcut_quad_min_extent: float = 0.75
+    yolo_weights_path: Path | None = None
+    yolo_confidence_high: float = 0.5
+    yolo_confidence_low: float = 0.25
+    yolo_union_max_area_ratio: float = 0.90
+    yolo_min_box_area_ratio: float = 0.001
+    yolo_max_box_area_ratio: float = 0.98
+    yolo_min_aspect_ratio: float = 0.02
+    yolo_max_aspect_ratio: float = 50.0
 
     def __post_init__(self) -> None:
-        _choice("mode", self.mode, {"none", "grabcut_foreground"})
+        _choice("mode", self.mode, {"none", "grabcut_foreground", "yolo_label"})
         _fraction("padding_x_fraction", self.padding_x_fraction)
         _fraction("padding_y_fraction", self.padding_y_fraction)
         if (
@@ -158,6 +166,24 @@ class CropConfig:
         if self.grabcut_soft_budget_ms > self.grabcut_time_budget_ms:
             raise ValueError("grabcut_soft_budget_ms must be <= grabcut_time_budget_ms")
         _fraction("grabcut_quad_min_extent", self.grabcut_quad_min_extent)
+
+        if self.yolo_weights_path is not None and not isinstance(self.yolo_weights_path, Path):
+            raise TypeError("yolo_weights_path must be a pathlib.Path or None")
+        if self.mode == "yolo_label" and self.yolo_weights_path is None:
+            raise ValueError("yolo_weights_path is required when mode is 'yolo_label'")
+        _fraction("yolo_confidence_high", self.yolo_confidence_high)
+        _fraction("yolo_confidence_low", self.yolo_confidence_low)
+        if self.yolo_confidence_low > self.yolo_confidence_high:
+            raise ValueError("yolo_confidence_low must be <= yolo_confidence_high")
+        _fraction("yolo_union_max_area_ratio", self.yolo_union_max_area_ratio)
+        _fraction("yolo_min_box_area_ratio", self.yolo_min_box_area_ratio)
+        _fraction("yolo_max_box_area_ratio", self.yolo_max_box_area_ratio)
+        if self.yolo_min_box_area_ratio > self.yolo_max_box_area_ratio:
+            raise ValueError("yolo_min_box_area_ratio must be <= yolo_max_box_area_ratio")
+        _positive_number("yolo_min_aspect_ratio", self.yolo_min_aspect_ratio)
+        _positive_number("yolo_max_aspect_ratio", self.yolo_max_aspect_ratio)
+        if self.yolo_min_aspect_ratio > self.yolo_max_aspect_ratio:
+            raise ValueError("yolo_min_aspect_ratio must be <= yolo_max_aspect_ratio")
 
 
 @dataclass(frozen=True)
@@ -296,7 +322,13 @@ class PreprocessConfig:
                 raise TypeError(f"{name} must be a {expected_type.__name__}")
 
     @classmethod
-    def grabcut_experimental(cls) -> "PreprocessConfig":
-        from .presets import build_grabcut_experimental_v1
+    def grabcut(cls) -> "PreprocessConfig":
+        from .presets import build_grabcut_v1
 
-        return build_grabcut_experimental_v1()
+        return build_grabcut_v1()
+
+    @classmethod
+    def yolo_label_crop_experimental(cls, weights_path: str | Path | None = None) -> "PreprocessConfig":
+        from .presets import build_yolo_label_crop_experimental_v1
+
+        return build_yolo_label_crop_experimental_v1(weights_path)

@@ -1,6 +1,8 @@
 # medicine-image-preprocessing
 
-A standalone image-preprocessing package for phone-camera images of medicine labels, cartons, and bottles. It can crop the detected foreground, correct minor tilt, normalize lighting and color, reduce noise, sharpen slightly soft images, and resize them for downstream processing. It returns a processed image and detailed operation metadata. It does not perform object detection, OCR, or text interpretation.
+A standalone image-preprocessing package for phone-camera images of medicine labels, cartons, and bottles. It crops to the label region, corrects minor tilt, normalizes lighting and color, reduces noise, sharpens slightly soft images, and resizes for downstream processing. It returns a processed image and detailed operation metadata. It does not perform OCR or text interpretation.
+
+Two crop mechanisms: `grabcut()` (default, no trained model) or `yolo_label_crop_experimental()` (trained label detector, requires the `yolo` extra, weights included). Everything after crop is identical either way.
 
 ## Installation
 
@@ -16,20 +18,21 @@ Requires Python 3.10.
 ```python
 from medicine_preprocess import PreprocessConfig, preprocess_image
 
-result = preprocess_image("medicine.jpg", PreprocessConfig.grabcut_experimental(), source_id="medicine-001")
+result = preprocess_image("medicine.jpg", PreprocessConfig.grabcut(), source_id="medicine-001")
 processed_bgr = result.image
 print(result.operations)
 ```
 
 ### Notes
 
-- `grabcut_experimental()` is the only configuration this package ships and the default when `config` is omitted.
+- `grabcut()` is the default when `config` is omitted.
+- `yolo_label_crop_experimental()` is the alternative crop mechanism. Requires `pip install medicine_preprocess[yolo]`. Uses the bundled weights by default; pass `weights_path=...` to use your own.
 - NumPy array inputs are assumed to be BGR by default. Set `InputConfig.array_color_order` when providing RGB or another supported color order.
 
 ## Pipeline
 
 1. Decode and canonicalize (EXIF orientation, BGR uint8)
-2. Crop (foreground detection)
+2. Crop (GrabCut foreground detection, or YOLO label detection)
 3. Deskew (small-angle correction)
 4. Pre-enhancement resize (downscale cap)
 5. Quality assessment
@@ -47,7 +50,8 @@ Each stage after decoding is independently skippable; stages 6-10 are individual
 
 Each correction below is quality-gated: applied only when a measurement of the image indicates it is needed, not unconditionally.
 
-- Foreground crop via classical segmentation (no trained model), 448 px working resolution, full-resolution output. 2.5 s hard timeout; uncropped fallback instead of a guessed center-crop.
+- Crop, GrabCut (default): classical foreground segmentation, no trained model, 448 px working resolution, full-resolution output, 2.5 s hard timeout, uncropped fallback.
+- Crop, YOLO (experimental): trained label detector, confidence-tiered acceptance (>=0.5 direct, 0.25-0.5 with a geometry sanity check), multiple detections unioned into one box unless the union covers >=90% of the frame, 5%/6% padding, uncropped fallback on low confidence or a near-full-frame union.
 - Small-angle deskew up to ±10°, validated before being kept.
 - White balance (gray-world, per-channel gain clamped to 0.8-1.25) and gamma brightening only (never darkening), in the range 1.0-1.55.
 - CLAHE local contrast correction, clip limit 1.4.
@@ -57,12 +61,13 @@ Each correction below is quality-gated: applied only when a measurement of the i
 
 ## Examples
 
-Unmodified `result.image` output at default settings. Each pair is the direct input and the direct output; no other processing.
+Unmodified `result.image` output, full pipeline, no other processing. Same 3 input photos through both crop mechanisms.
 
 | | Label | Flat carton | Bottle |
 | --- | --- | --- | --- |
 | Input | ![Label input](examples/label_input.jpg) | ![Flat carton input](examples/flat_carton_input.jpg) | ![Bottle input](examples/bottle_input.jpg) |
-| Output | ![Label output](examples/label_output.jpg) | ![Flat carton output](examples/flat_carton_output.jpg) | ![Bottle output](examples/bottle_output.jpg) |
+| Output, GrabCut | ![Label output, GrabCut](examples/label_output_grabcut.jpg) | ![Flat carton output, GrabCut](examples/flat_carton_output_grabcut.jpg) | ![Bottle output, GrabCut](examples/bottle_output_grabcut.jpg) |
+| Output, YOLO | ![Label output, YOLO](examples/label_output_yolo.jpg) | ![Flat carton output, YOLO](examples/flat_carton_output_yolo.jpg) | ![Bottle output, YOLO](examples/bottle_output_yolo.jpg) |
 
 ## Output
 
@@ -77,16 +82,19 @@ Unmodified `result.image` output at default settings. Each pair is the direct in
 
 ## Performance
 
-Measured on a 163-image dataset:
+Measured on the same 163-image dataset for both crop mechanisms:
 
 | Stage | p50 | p90 | max |
 | --- | --- | --- | --- |
-| Full pipeline | 1060 ms | 1817 ms | 3852 ms |
-| Crop stage | 530 ms | 1163 ms | 2539 ms |
+| Full pipeline, GrabCut crop | 1060 ms | 1817 ms | 3852 ms |
+| Full pipeline, YOLO crop | 391 ms | 1005 ms | 1328 ms |
+| Crop stage, GrabCut | 530 ms | 1163 ms | 2539 ms |
+| Crop stage, YOLO | 48 ms | 75 ms | 173 ms |
 
-Crop timeout rate: 1.2% (2/163). Crop applied confidently on 156/163 images (96%); the remaining 7 fell back to the uncropped image (2 timeout, 5 low-confidence rejection).
+GrabCut: crop timeout rate 1.2% (2/163); applied confidently on 156/163 (96%), 7 fell back (2 timeout, 5 low-confidence rejection).
+YOLO: applied on 161/163 (99%); 2 fell back to the uncropped image.
 
-### Per-stage breakdown
+### Per-stage breakdown, GrabCut
 
 | Stage | p50 | p90 | max |
 | --- | --- | --- | --- |
@@ -102,10 +110,24 @@ Crop timeout rate: 1.2% (2/163). Crop applied confidently on 156/163 images (96%
 | clahe | 0.0 ms | 18.6 ms | 70.2 ms |
 | resize (final) | 6.0 ms | 10.5 ms | 20.7 ms |
 
+### Per-stage breakdown, YOLO
+
+CPU inference, steady state (excludes one-time model-load cost on the first call).
+
+| Stage | p50 | p90 | max |
+| --- | --- | --- | --- |
+| canonicalize (decode) | 36.2 ms | 260.8 ms | 300.2 ms |
+| crop (YOLO) | 47.9 ms | 74.5 ms | 172.8 ms |
+| deskew | 21.9 ms | 75.7 ms | 168.0 ms |
+| pre_enhancement_resize | 1.0 ms | 29.3 ms | 56.5 ms |
+| white_balance | 30.5 ms | 121.7 ms | 273.2 ms |
+| clahe | 0.0 ms | 17.3 ms | 105.5 ms |
+| sharpen | 0.0 ms | 0.0 ms | 396.7 ms |
+| resize (final) | 20.2 ms | 31.2 ms | 54.5 ms |
+
 ## Limitations
 
-- No object detection.
-- No semantic label localization (text, logo, or barcode identification).
+- No sub-field localization (drug name, dose, logo, or barcode identification).
 - No automatic 90-degree-multiple orientation correction.
 - No perspective correction in this configuration.
 - No curved or cylindrical label unwrapping.
@@ -113,7 +135,7 @@ Crop timeout rate: 1.2% (2/163). Crop applied confidently on 156/163 images (96%
 
 ## Windows multiprocessing note
 
-Crop detection runs in a separate process. On Windows, guard your entry point with `if __name__ == "__main__":`. Without it, the failure is silent: crop always times out and returns the uncropped image rather than raising an error.
+GrabCut crop detection runs in a separate process. On Windows, guard your entry point with `if __name__ == "__main__":`. Without it, the failure is silent: crop always times out and returns the uncropped image rather than raising an error. YOLO crop runs synchronously in-process and isn't affected by this.
 
 ## Tests
 

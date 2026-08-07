@@ -14,12 +14,13 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8,<9"]
+yolo = ["ultralytics>=8.3,<9"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
 
 [tool.setuptools.package-data]
-"medicine_preprocess.data" = ["quality_thresholds_v2.json"]
+"medicine_preprocess.data" = ["quality_thresholds_v2.json", "best.pt"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

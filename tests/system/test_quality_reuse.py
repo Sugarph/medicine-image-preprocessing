@@ -8,12 +8,12 @@ from medicine_preprocess import PreprocessConfig, preprocess_image
 
 
 def test_capped_quality_before_is_never_reused_as_working_quality() -> None:
-    # grabcut_experimental sets pre_crop_analysis_max_long_side=1024, so
-    # quality_before is measured on a downscaled preview even when crop and
-    # resize are both no-ops and the real working image is untouched --
-    # that preview must never stand in for working_quality/quality_after,
-    # since it was never calibrated against thresholds at this resolution.
-    base = PreprocessConfig.grabcut_experimental()
+    # grabcut() sets pre_crop_analysis_max_long_side=1024, so quality_before
+    # is measured on a downscaled preview even when crop and resize are both
+    # no-ops and the real working image is untouched -- that preview must
+    # never stand in for working_quality/quality_after, since it was never
+    # calibrated against thresholds at this resolution.
+    base = PreprocessConfig.grabcut()
     assert base.quality.pre_crop_analysis_max_long_side == 1024
     config = replace(
         base,

@@ -4,6 +4,7 @@ import multiprocessing as mp
 import queue as queue_module
 import threading
 from dataclasses import dataclass, replace
+from functools import lru_cache
 import math
 
 import cv2
@@ -507,6 +508,100 @@ def _apply_grabcut_foreground(
     return replace(outcome, quadrilateral=candidate)
 
 
+def _passes_geometry_check(
+    box: tuple[float, float, float, float], img_w: int, img_h: int, config: CropConfig
+) -> bool:
+    x1, y1, x2, y2 = box
+    w, h = x2 - x1, y2 - y1
+    if w <= 1 or h <= 1:
+        return False
+    area_ratio = (w * h) / (img_w * img_h)
+    if not (config.yolo_min_box_area_ratio <= area_ratio <= config.yolo_max_box_area_ratio):
+        return False
+    aspect = w / h
+    return config.yolo_min_aspect_ratio <= aspect <= config.yolo_max_aspect_ratio
+
+
+def _select_yolo_crop_box(
+    boxes_xyxy: list[tuple[float, float, float, float]],
+    confs: list[float],
+    img_w: int,
+    img_h: int,
+    config: CropConfig,
+) -> tuple[tuple[float, float, float, float] | None, str]:
+    """Confidence-tiered candidate selection with union-of-distinct-boxes,
+    matching the policy validated in yolo/apply_crop.py's crop-quality
+    evaluation (0 CLIPPED, 0 WRONG on 163 images)."""
+    accepted = []
+    for box, conf in zip(boxes_xyxy, confs):
+        if conf >= config.yolo_confidence_high:
+            accepted.append(box)
+        elif conf >= config.yolo_confidence_low and _passes_geometry_check(box, img_w, img_h, config):
+            accepted.append(box)
+    if not accepted:
+        return None, "no_confident_detection"
+
+    ux1 = min(b[0] for b in accepted)
+    uy1 = min(b[1] for b in accepted)
+    ux2 = max(b[2] for b in accepted)
+    uy2 = max(b[3] for b in accepted)
+    union_area_ratio = ((ux2 - ux1) * (uy2 - uy1)) / (img_w * img_h)
+    if union_area_ratio >= config.yolo_union_max_area_ratio:
+        return None, "union_near_full_frame"
+
+    reason = "yolo_single_box_detected" if len(accepted) == 1 else f"yolo_{len(accepted)}_boxes_united"
+    return (ux1, uy1, ux2, uy2), reason
+
+
+@lru_cache(maxsize=4)
+def _load_yolo_model(weights_path: str):
+    try:
+        from ultralytics import YOLO
+    except ImportError as exc:
+        raise ImportError(
+            "yolo_label_crop_experimental() requires the optional 'yolo' extra: "
+            "pip install medicine_preprocess[yolo]"
+        ) from exc
+    return YOLO(weights_path)
+
+
+def _apply_yolo_label(
+    image: np.ndarray,
+    config: CropConfig,
+    transform: TransformState,
+) -> CropOutcome:
+    model = _load_yolo_model(str(config.yolo_weights_path))
+    results = model.predict(source=image, conf=config.yolo_confidence_low, verbose=False)
+    result = results[0]
+    height, width = image.shape[:2]
+    if result.boxes is not None and len(result.boxes):
+        boxes_xyxy = [tuple(b) for b in result.boxes.xyxy.cpu().numpy().tolist()]
+        confs = [float(c) for c in result.boxes.conf.cpu().numpy().tolist()]
+    else:
+        boxes_xyxy, confs = [], []
+
+    details = {
+        "method": "yolo_label",
+        "num_detections": len(boxes_xyxy),
+        "confidences": [round(c, 3) for c in confs],
+    }
+    box, reason = _select_yolo_crop_box(boxes_xyxy, confs, width, height, config)
+    if box is None:
+        # No-crop fallback by design, not a guessed center-crop.
+        return CropOutcome(
+            np.ascontiguousarray(image.copy()),
+            transform,
+            CropMetadata(),
+            OperationRecord("crop", OperationStatus.SKIPPED, reason, details=details),
+            True,
+        )
+    int_box = (int(round(box[0])), int(round(box[1])), int(round(box[2])), int(round(box[3])))
+    padded_box = _add_hybrid_padding(int_box, image.shape, config)
+    outcome = _apply_box(image, padded_box, transform, reason)
+    record = replace(outcome.record, details={**outcome.record.details, **details})
+    return replace(outcome, record=record)
+
+
 def apply_crop(
     image: np.ndarray,
     config: CropConfig,
@@ -524,6 +619,8 @@ def apply_crop(
         )
     if experimental and config.mode == "grabcut_foreground":
         return _apply_grabcut_foreground(image, config, transform)
+    if experimental and config.mode == "yolo_label":
+        return _apply_yolo_label(image, config, transform)
     return CropOutcome(
         np.ascontiguousarray(image.copy()),
         transform,

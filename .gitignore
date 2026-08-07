@@ -7,3 +7,5 @@ build/
 dist/
 runs/
 samples/
+*.pt
+!src/medicine_preprocess/data/best.pt
